@@ -1,0 +1,59 @@
+import boto3
+from botocore.exceptions import ClientError
+import os
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
+# 初始化AWS服务客户端
+s3 = boto3.client('s3')
+ses = boto3.client('ses')
+
+# 配置变量
+BUCKET_NAME = 'lambda-to-s3-uptrillionuat'
+SENDER = 'zexing.li@pax.us'  # 替换为你的SES验证过的发件人地址
+RECIPIENT = 'zexing.li@pax.us'  # 接收者邮箱地址
+
+def get_latest_file(bucket_name):
+    """获取桶中最新的文件的键"""
+    try:
+        response = s3.list_objects_v2(Bucket=bucket_name)
+        all_objects = response.get('Contents', [])
+        latest_file = max(all_objects, key=lambda obj: obj['LastModified'])
+        return latest_file['Key']
+    except ClientError as e:
+        print(f"Error getting latest file: {e}")
+        raise
+
+def send_email_with_attachment(sender, recipient, subject, bucket, file_key):
+    """从S3获取文件并通过SES发送邮件"""
+    try:
+        file_obj = s3.get_object(Bucket=bucket, Key=file_key)
+        file_content = file_obj['Body'].read()
+        file_name = os.path.basename(file_key)
+        
+        msg = MIMEMultipart()
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = recipient
+
+        body = MIMEText('Please find the attached file.', 'plain')
+        msg.attach(body)
+
+        part = MIMEApplication(file_content)
+        part.add_header('Content-Disposition', 'attachment', filename=file_name)
+        msg.attach(part)
+
+        ses.send_raw_email(Source=sender, Destinations=[recipient], RawMessage={'Data': msg.as_string()})
+        print("Email sent successfully!")
+    except ClientError as e:
+        print(f"Error sending email: {e}")
+        raise
+
+def lambda_handler(event, context):
+    try:
+        latest_file_key = get_latest_file(BUCKET_NAME)
+        subject = 'Latest S3 File Attachment'
+        send_email_with_attachment(SENDER, RECIPIENT, subject, BUCKET_NAME, latest_file_key)
+    except Exception as e:
+        print(f"Lambda execution error: {e}")
